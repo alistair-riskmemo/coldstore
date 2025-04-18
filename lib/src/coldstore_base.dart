@@ -36,14 +36,23 @@ class ColdStore {
   /// Active document watchers
   final Map<String, StreamSubscription<DocumentSnapshot>> _listeners = {};
 
+  /// Set of document paths that are being watched
+  final Set<String> _watchedPaths = {};
+
   /// The Firestore instance to use
   final FirebaseFirestore _firestore;
 
+  /// Whether to automatically watch documents when they're first accessed
+  final bool autoWatch;
+
   /// Creates a new ColdStore instance.
   ///
-  /// Optionally accepts a custom [firestore] instance. If not provided,
+  /// [firestore] - Optional custom Firestore instance. If not provided,
   /// uses [FirebaseFirestore.instance].
-  ColdStore({FirebaseFirestore? firestore})
+  ///
+  /// [autoWatch] - Whether to automatically start watching documents when they're
+  /// first accessed via [get]. Defaults to true.
+  ColdStore({FirebaseFirestore? firestore, this.autoWatch = true})
       : _firestore = firestore ?? FirebaseFirestore.instance;
 
   /// Gets the storage key for a document reference.
@@ -155,7 +164,7 @@ class ColdStore {
       if (!await file.exists()) return null;
       final contents = await file.readAsString();
       final data = jsonDecode(contents) as Map<String, dynamic>;
-      return _convertFromStorage(data, docRef.firestore);
+      return _convertFromStorage(data, _firestore);
     } catch (e) {
       return null;
     }
@@ -168,15 +177,24 @@ class ColdStore {
   /// 2. Persistent storage (JSON files)
   /// 3. Firestore (if not found in cache)
   ///
+  /// If [autoWatch] is true (default), automatically starts watching the document
+  /// for changes when it's first accessed.
+  ///
   /// Returns null if the document doesn't exist or an error occurs.
   ///
   /// Example:
   /// ```dart
   /// final docRef = FirebaseFirestore.instance.doc('users/123');
   /// final data = await coldStore.get(docRef);
+  /// // Document is now automatically watched if autoWatch is true
   /// ```
   Future<Map<String, dynamic>?> get(DocumentReference docRef) async {
     final key = _getDocumentKey(docRef);
+
+    // Start watching if auto-watch is enabled and not already watching
+    if (autoWatch && !_watchedPaths.contains(key)) {
+      await watch(docRef);
+    }
 
     // 1. Check memory cache
     if (_memoryCache.containsKey(key)) {
@@ -211,6 +229,8 @@ class ColdStore {
   /// Changes are automatically synchronized to both memory cache and persistent storage.
   /// If the document is already being watched, this is a no-op.
   ///
+  /// This is called automatically by [get] if [autoWatch] is true.
+  ///
   /// Example:
   /// ```dart
   /// final docRef = FirebaseFirestore.instance.doc('users/123');
@@ -219,7 +239,7 @@ class ColdStore {
   /// ```
   Future<void> watch(DocumentReference docRef) async {
     final key = _getDocumentKey(docRef);
-    if (_listeners.containsKey(key)) return;
+    if (_watchedPaths.contains(key)) return;
 
     final subscription = docRef.snapshots().listen((doc) async {
       final data = doc.data() as Map<String, dynamic>?;
@@ -230,6 +250,7 @@ class ColdStore {
     });
 
     _listeners[key] = subscription;
+    _watchedPaths.add(key);
   }
 
   /// Stops watching a document for changes.
@@ -246,6 +267,7 @@ class ColdStore {
     final subscription = _listeners.remove(key);
     if (subscription != null) {
       await subscription.cancel();
+      _watchedPaths.remove(key);
     }
   }
 
@@ -296,6 +318,7 @@ class ColdStore {
       await subscription.cancel();
     }
     _listeners.clear();
+    _watchedPaths.clear();
     _memoryCache.clear();
   }
 }

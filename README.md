@@ -13,6 +13,7 @@ A Flutter package that provides three-layer caching for Firestore documents, opt
   - [Watching Documents](#watching-documents)
   - [Cache Management](#cache-management)
   - [Cleanup](#cleanup)
+  - [Automatic Document Watching](#automatic-document-watching)
 - [Supported Data Types](#supported-data-types)
 - [How it Works](#how-it-works)
 - [Best Practices](#best-practices)
@@ -23,11 +24,12 @@ A Flutter package that provides three-layer caching for Firestore documents, opt
 
 - Three-layer caching strategy (Memory → Persistent Storage → Firestore)
 - Automatic document syncing with Firestore
+- Automatic document watching for accessed documents
 - Efficient memory cache for fastest access
 - Persistent JSON storage as fallback
 - No external database dependencies
 - Support for all Firestore data types
-- Simple API for document watching and retrieval
+- Simple API for document access
 
 ## Installation
 
@@ -50,10 +52,7 @@ final coldStore = ColdStore();
 // Get a document reference
 final docRef = FirebaseFirestore.instance.doc('users/123');
 
-// Start watching the document
-await coldStore.watch(docRef);
-
-// Get document data (checks all cache layers)
+// Get document data - automatically starts watching for changes
 final userData = await coldStore.get(docRef);
 
 // Clean up when done
@@ -65,8 +64,11 @@ await coldStore.dispose();
 ### Initialization
 
 ```dart
-// Default initialization
+// Default initialization with auto-watching enabled
 final coldStore = ColdStore();
+
+// Disable automatic watching if needed
+final coldStore = ColdStore(autoWatch: false);
 
 // With custom Firestore instance
 final customFirestore = FirebaseFirestore.instance;
@@ -78,17 +80,17 @@ final coldStore = ColdStore(firestore: customFirestore);
 ```dart
 final docRef = FirebaseFirestore.instance.doc('users/123');
 
-// Get data (checks memory → persistent storage → Firestore)
+// Get data (automatically starts watching for changes)
 final data = await coldStore.get(docRef);
+
+// Document changes in Firestore will automatically update cache
 ```
 
 ### Watching Documents
 
 ```dart
-// Start watching
+// Manual watching (not needed if autoWatch is true)
 await coldStore.watch(docRef);
-
-// Document changes will automatically update both memory and persistent cache
 
 // Stop watching when no longer needed
 await coldStore.unwatch(docRef);
@@ -110,6 +112,33 @@ await coldStore.clear(null);
 // Always dispose when done to prevent memory leaks
 await coldStore.dispose();
 ```
+
+### Automatic Document Watching
+
+By default, ColdStore automatically starts watching any document that you access via the `get()` method. This means:
+
+1. First call to `get()` for a document:
+
+   - Retrieves data from cache or Firestore
+   - Sets up a real-time listener for changes
+   - Future changes are automatically synced to cache
+
+2. Subsequent calls to `get()` for the same document:
+
+   - Return cached data immediately
+   - Cache is always up-to-date due to background watching
+
+3. Benefits:
+
+   - Simpler API - no need to manually call `watch()`
+   - Ensures data stays fresh
+   - Prevents missed updates
+   - Optimizes Firestore usage
+
+4. Control:
+   - Disable with `ColdStore(autoWatch: false)`
+   - Manually control with `watch()` and `unwatch()`
+   - All watchers cleaned up on `dispose()`
 
 ## Supported Data Types
 

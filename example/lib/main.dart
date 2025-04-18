@@ -33,6 +33,7 @@ class UserProfilePage extends StatefulWidget {
 }
 
 class _UserProfilePageState extends State<UserProfilePage> {
+  // Create ColdStore with auto-watching enabled (default)
   final ColdStore _coldStore = ColdStore();
   Map<String, dynamic>? _userData;
   bool _isLoading = true;
@@ -46,10 +47,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
   }
 
   Future<void> _initializeData() async {
-    // Start watching the document for real-time updates
-    await _coldStore.watch(_userDoc);
-
-    // Initial data fetch
+    // No need to explicitly call watch() - it happens automatically on first get()
     await _refreshData();
   }
 
@@ -57,6 +55,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     setState(() => _isLoading = true);
 
     try {
+      // This will automatically start watching the document
       final data = await _coldStore.get(_userDoc);
       setState(() {
         _userData = data;
@@ -75,6 +74,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
   Future<void> _updateUserData() async {
     try {
       // Direct Firestore update - ColdStore will automatically sync
+      // since the document is being watched
       await _userDoc.set({
         'name': 'John Doe',
         'email': 'john@example.com',
@@ -95,7 +95,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
   @override
   void dispose() {
-    _coldStore.unwatch(_userDoc);
+    // No need to manually unwatch - dispose() handles cleanup
     _coldStore.dispose();
     super.dispose();
   }
