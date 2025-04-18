@@ -8,18 +8,25 @@
 /// Example usage:
 /// ```dart
 /// final coldStore = ColdStore();
+/// final docRef = FirebaseFirestore.instance.doc('users/123');
 ///
 /// // Start watching a document
-/// await coldStore.watch('users/123');
+/// await coldStore.watch(docRef);
 ///
 /// // Get document data (checks cache layers automatically)
-/// final userData = await coldStore.getData('users/123');
+/// final userData = await coldStore.get(docRef);
 ///
 /// // Data is automatically kept in sync with Firestore
 /// // and stored in both memory and persistent storage
 ///
+/// // Clear cache for a specific document
+/// await coldStore.clear(docRef);
+///
+/// // Or clear all cached data
+/// await coldStore.clear(null);
+///
 /// // Stop watching when done
-/// await coldStore.unwatch('users/123');
+/// await coldStore.unwatch(docRef);
 /// ```
 ///
 /// The package handles all Firestore data types including:
@@ -27,6 +34,8 @@
 /// - GeoPoints
 /// - DocumentReferences
 /// - Arrays and nested objects
+///
+/// No additional setup is required beyond Firebase initialization.
 library coldstore;
 
 export 'src/coldstore_base.dart' show ColdStore;

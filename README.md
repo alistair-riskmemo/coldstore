@@ -1,6 +1,23 @@
 # ColdStore
 
-A Flutter package that provides a three-layer caching system for Firestore documents, optimizing data access and offline capabilities.
+A Flutter package that provides three-layer caching for Firestore documents, optimizing data access and offline capabilities.
+
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Detailed Usage](#detailed-usage)
+  - [Initialization](#initialization)
+  - [Reading Data](#reading-data)
+  - [Watching Documents](#watching-documents)
+  - [Cache Management](#cache-management)
+  - [Cleanup](#cleanup)
+- [Supported Data Types](#supported-data-types)
+- [How it Works](#how-it-works)
+- [Best Practices](#best-practices)
+- [Example App](#example-app)
+- [License](#license)
 
 ## Features
 
@@ -9,6 +26,7 @@ A Flutter package that provides a three-layer caching system for Firestore docum
 - Efficient memory cache for fastest access
 - Persistent JSON storage as fallback
 - No external database dependencies
+- Support for all Firestore data types
 - Simple API for document watching and retrieval
 
 ## Installation
@@ -20,53 +38,148 @@ dependencies:
   coldstore: ^0.1.0
 ```
 
-## Usage
+## Quick Start
 
 ```dart
-// Initialize ColdStore
+// Initialize Firebase (required)
+await Firebase.initializeApp();
+
+// Create a ColdStore instance
 final coldStore = ColdStore();
 
-// Start watching a document
-await coldStore.watch('users/123');
+// Get a document reference
+final docRef = FirebaseFirestore.instance.doc('users/123');
 
-// Get document data (checks cache layers automatically)
-final userData = await coldStore.getData('users/123');
+// Start watching the document
+await coldStore.watch(docRef);
 
-// Data is automatically kept in sync with Firestore
-// and stored in both memory and persistent storage
+// Get document data (checks all cache layers)
+final userData = await coldStore.get(docRef);
 
-// Stop watching when done
-await coldStore.unwatch('users/123');
-
-// Clear cache for specific document
-await coldStore.clearCache('users/123');
-
-// Clear all cache
-await coldStore.clearCache(null);
-
-// Dispose when done
+// Clean up when done
 await coldStore.dispose();
 ```
 
-## How it works
+## Detailed Usage
+
+### Initialization
+
+```dart
+// Default initialization
+final coldStore = ColdStore();
+
+// With custom Firestore instance
+final customFirestore = FirebaseFirestore.instance;
+final coldStore = ColdStore(firestore: customFirestore);
+```
+
+### Reading Data
+
+```dart
+final docRef = FirebaseFirestore.instance.doc('users/123');
+
+// Get data (checks memory → persistent storage → Firestore)
+final data = await coldStore.get(docRef);
+```
+
+### Watching Documents
+
+```dart
+// Start watching
+await coldStore.watch(docRef);
+
+// Document changes will automatically update both memory and persistent cache
+
+// Stop watching when no longer needed
+await coldStore.unwatch(docRef);
+```
+
+### Cache Management
+
+```dart
+// Clear cache for a specific document
+await coldStore.clear(docRef);
+
+// Clear all cached data
+await coldStore.clear(null);
+```
+
+### Cleanup
+
+```dart
+// Always dispose when done to prevent memory leaks
+await coldStore.dispose();
+```
+
+## Supported Data Types
+
+ColdStore automatically handles all Firestore data types:
+
+- Timestamps
+- GeoPoints
+- DocumentReferences
+- Arrays
+- Maps/Objects
+- Nested combinations of the above
+
+## How it Works
 
 ColdStore implements a three-layer caching strategy:
 
-1. Memory Cache: Fastest access, holds recently accessed documents
-2. Persistent Storage: JSON files stored on device for offline access
-3. Firestore: Source of truth, accessed only when needed
+1. **Memory Cache (Layer 1)**
 
-When requesting data:
+   - Fastest access
+   - Holds recently accessed documents
+   - Cleared when app is terminated
 
-- First checks memory cache
-- If not found, checks persistent storage
-- If not found, fetches from Firestore
+2. **Persistent Storage (Layer 2)**
 
-When watching documents:
+   - JSON files stored on device
+   - Survives app restarts
+   - Provides offline access
 
-- Updates memory cache and persistent storage automatically
-- Maintains subscription to Firestore changes
-- Ensures data consistency across all layers
+3. **Firestore (Layer 3)**
+   - Source of truth
+   - Accessed only when needed
+   - Real-time updates via watchers
+
+Data flow:
+
+1. When requesting data, checks memory cache first
+2. If not found, checks persistent storage
+3. If not found, fetches from Firestore
+4. When watching documents, updates flow from Firestore → Memory → Persistent Storage
+
+## Best Practices
+
+1. **Initialization**
+
+   - Create a single ColdStore instance for your app
+   - Initialize early in your app lifecycle
+
+2. **Document Watching**
+
+   - Watch documents you need to keep synchronized
+   - Unwatch when the data is no longer needed
+   - Consider using StatefulWidget's initState/dispose
+
+3. **Cache Management**
+
+   - Clear specific document caches when data becomes stale
+   - Use full cache clear sparingly
+
+4. **Cleanup**
+   - Always call dispose() when done with ColdStore
+   - Particularly important in temporary screens/widgets
+
+## Example App
+
+Check out the [example](example) directory for a complete sample application demonstrating:
+
+- User profile management
+- Real-time updates
+- Cache management
+- Proper lifecycle handling
 
 ## License
 

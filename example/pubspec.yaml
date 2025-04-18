@@ -1,0 +1,22 @@
+name: coldstore_example
+description: Example Flutter application demonstrating ColdStore usage
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  firebase_core: ^2.24.2
+  cloud_firestore: ^4.14.0
+  coldstore:
+    path: ../
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+
+flutter:
+  uses-material-design: true
