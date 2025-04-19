@@ -16,10 +16,10 @@ void main() {
     // Initialize Firebase for testing
     await Firebase.initializeApp();
     firestore = FirebaseFirestore.instance;
-    
+
     // Create a temporary directory for cache
     tempDir = await Directory.systemTemp.createTemp('coldstore_test_');
-    
+
     // Mock getApplicationDocumentsDirectory to use our temp directory
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
@@ -69,22 +69,22 @@ void main() {
   group('Cache management', () {
     test('tracks cache size correctly', () async {
       final docRef = firestore.doc('test/doc1');
-      
+
       // Save document to cache
       await coldStore.get(docRef);
-      
+
       expect(coldStore.currentCacheSize, isNonNegative);
     });
 
     test('enforces cache size limit', () async {
       final store = ColdStore(maxCacheSize: 1024); // 1KB limit
-      
+
       // Add documents until we exceed the limit
       for (int i = 0; i < 10; i++) {
         final docRef = firestore.doc('test/doc$i');
         await store.get(docRef);
       }
-      
+
       expect(store.currentCacheSize, lessThanOrEqualTo(1024));
     });
 
@@ -116,7 +116,7 @@ void main() {
     test('watch starts document listener', () async {
       final docRef = firestore.doc('test/doc1');
       await coldStore.watch(docRef);
-      
+
       final watchers = coldStore.listActiveWatchers();
       expect(watchers['documents'], contains(docRef.path));
     });
@@ -125,7 +125,7 @@ void main() {
       final docRef = firestore.doc('test/doc1');
       await coldStore.watch(docRef);
       await coldStore.unwatch(docRef);
-      
+
       final watchers = coldStore.listActiveWatchers();
       expect(watchers['documents'], isEmpty);
     });
@@ -142,7 +142,7 @@ void main() {
     test('watchCollection starts collection listener', () async {
       final colRef = firestore.collection('test');
       await coldStore.watchCollection(colRef);
-      
+
       final watchers = coldStore.listActiveWatchers();
       expect(watchers['collections'], contains(colRef.path));
     });
@@ -151,7 +151,7 @@ void main() {
       final colRef = firestore.collection('test');
       await coldStore.watchCollection(colRef);
       await coldStore.unwatchCollection(colRef);
-      
+
       final watchers = coldStore.listActiveWatchers();
       expect(watchers['collections'], isEmpty);
     });
