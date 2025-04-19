@@ -12,6 +12,11 @@
 - Automatic document watching and syncing
 - Clear API for cache management
 - Comprehensive documentation and examples
+- Cache size management with configurable limits (100MB default)
+- Cache usage monitoring and statistics
+- Tools for inspecting cached documents and collections
+- Cache usage threshold warnings
+- Automatic cleanup of old cache entries
 
 ### Breaking Changes
 

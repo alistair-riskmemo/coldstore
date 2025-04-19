@@ -35,6 +35,8 @@ A Flutter package that provides three-layer caching for Firestore documents and 
 - Support for all Firestore data types
 - Query result caching
 - Simple API for data access
+- Cache size management and monitoring
+- Cache statistics and inspection tools
 
 ## Installation
 
@@ -183,13 +185,115 @@ await coldStore.unwatchCollection(collectionRef);
 
 ### Cache Management
 
+ColdStore provides comprehensive tools for monitoring and managing cache usage:
+
 ```dart
-// Clear cache for a specific document
+// Initialize with custom cache size (default is 100MB)
+final coldStore = ColdStore(maxCacheSize: 50 * 1024 * 1024); // 50MB
+
+// Or with unlimited cache size
+final coldStore = ColdStore(cacheSizeUnlimited: true);
+
+// Get cache statistics
+final stats = coldStore.getCacheStats();
+print('Cache size: ${stats['currentSize']} bytes');
+print('Cache usage: ${stats['percentUsed']}%');
+print('Cached documents: ${stats['numDocuments']}');
+print('Cached collections: ${stats['numCollections']}');
+print('Active watchers: ${stats['numWatchers']}');
+
+// Check if cache is nearly full (default 90% threshold)
+if (coldStore.isCacheNearlyFull()) {
+  // Show warning to user
+  showDialog('Cache is nearly full. Please clear some data.');
+}
+
+// Custom threshold
+if (coldStore.isCacheNearlyFull(80)) {
+  // Cache is over 80% full
+}
+
+// List cached documents with metadata
+final docs = await coldStore.listCachedDocuments();
+for (final entry in docs.entries) {
+  print('Document: ${entry.value['path']}');
+  print('Size: ${entry.value['size']} bytes');
+  print('Last modified: ${entry.value['lastModified']}');
+  print('Is watched: ${entry.value['isWatched']}');
+}
+
+// List cached collections
+final collections = await coldStore.listCachedCollections();
+for (final entry in collections.entries) {
+  print('Collection: ${entry.value['path']}');
+  print('Document count: ${entry.value['documentCount']}');
+  print('Size: ${entry.value['size']} bytes');
+}
+
+// List active watchers
+final watchers = coldStore.listActiveWatchers();
+print('Watched documents: ${watchers['documents'].length}');
+print('Watched collections: ${watchers['collections'].length}');
+
+// Clear specific items from cache
 await coldStore.clear(docRef);
 
-// Clear all cached data (documents and collections)
+// Clear all cache
 await coldStore.clear(null);
 ```
+
+#### Cache Size Management
+
+By default, ColdStore limits the cache size to 100MB to prevent excessive storage usage. When the cache approaches its limit:
+
+1. New writes will trigger cleanup of older cached items
+2. Oldest files are removed first (based on last modified time)
+3. Both document and collection caches are considered
+4. Active watchers are preserved
+
+You can:
+
+- Set a custom cache size limit
+- Enable unlimited cache size
+- Monitor cache usage
+- Implement custom cleanup strategies
+
+#### Cache Inspection
+
+ColdStore provides tools to inspect:
+
+1. Cache Statistics
+
+   - Current and maximum size
+   - Usage percentage
+   - Number of cached items
+   - Number of active watchers
+
+2. Cached Documents
+
+   - Document paths
+   - Individual file sizes
+   - Last modified times
+   - Watcher status
+
+3. Cached Collections
+
+   - Collection paths
+   - Document counts
+   - Total collection sizes
+   - Query information
+
+4. Active Watchers
+   - Watched document paths
+   - Watched collection paths
+   - Query watchers
+
+Use these tools to:
+
+- Monitor cache health
+- Debug cache behavior
+- Implement cleanup policies
+- Manage offline data
 
 ### Cleanup
 

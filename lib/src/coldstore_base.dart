@@ -72,6 +72,9 @@ class ColdStoreQuerySnapshot {
 /// await coldStore.dispose();
 /// ```
 class ColdStore {
+  /// Default maximum cache size in bytes (100MB)
+  static const int _defaultMaxCacheSize = 100 * 1024 * 1024;
+
   /// In-memory cache storing document data and metadata
   final Map<String, ColdStoreDocument> _memoryCache = {};
 
@@ -97,6 +100,18 @@ class ColdStore {
   /// Whether to automatically watch documents when they're first accessed
   final bool autoWatch;
 
+  /// Whether the cache size is unlimited
+  final bool _cacheSizeUnlimited;
+
+  /// Maximum cache size in bytes
+  final int _maxCacheSize;
+
+  /// Current cache size in bytes
+  int _currentCacheSize = 0;
+
+  /// Map of file paths to their sizes for cache management
+  final Map<String, int> _fileSizes = {};
+
   /// Creates a new ColdStore instance.
   ///
   /// [firestore] - Optional custom Firestore instance. If not provided,
@@ -104,8 +119,21 @@ class ColdStore {
   ///
   /// [autoWatch] - Whether to automatically start watching documents when they're
   /// first accessed via [get]. Defaults to true.
-  ColdStore({FirebaseFirestore? firestore, this.autoWatch = true})
-      : _firestore = firestore ?? FirebaseFirestore.instance;
+  ///
+  /// [cacheSizeUnlimited] - Whether to allow unlimited cache size. Defaults to false.
+  ///
+  /// [maxCacheSize] - Maximum cache size in bytes. Ignored if cacheSizeUnlimited is true.
+  /// Defaults to 100MB.
+  ColdStore({
+    FirebaseFirestore? firestore,
+    this.autoWatch = true,
+    bool cacheSizeUnlimited = false,
+    int? maxCacheSize,
+  })  : _firestore = firestore ?? FirebaseFirestore.instance,
+        _cacheSizeUnlimited = cacheSizeUnlimited,
+        _maxCacheSize = maxCacheSize ?? _defaultMaxCacheSize {
+    _initializeCacheSize();
+  }
 
   /// Gets the storage key for a document reference.
   String _getDocumentKey(DocumentReference docRef) => docRef.path;
@@ -216,30 +244,115 @@ class ColdStore {
     }));
   }
 
+  /// Initializes cache size tracking by calculating current cache size
+  Future<void> _initializeCacheSize() async {
+    if (_cacheSizeUnlimited) return;
+
+    final directory = Directory(await _localPath);
+    if (!await directory.exists()) return;
+
+    await for (final entity in directory.list(recursive: true)) {
+      if (entity is File) {
+        final size = await entity.length();
+        _currentCacheSize += size;
+        _fileSizes[entity.path] = size;
+      }
+    }
+  }
+
+  /// Updates cache size tracking when adding or removing files
+  Future<void> _updateCacheSize(String filePath, int? newSize) async {
+    if (_cacheSizeUnlimited) return;
+
+    // Remove old size if file existed
+    final oldSize = _fileSizes[filePath];
+    if (oldSize != null) {
+      _currentCacheSize -= oldSize;
+      _fileSizes.remove(filePath);
+    }
+
+    // Add new size if provided
+    if (newSize != null) {
+      _currentCacheSize += newSize;
+      _fileSizes[filePath] = newSize;
+    }
+
+    // Enforce cache size limit if needed
+    await _enforceCacheSizeLimit();
+  }
+
+  /// Enforces the cache size limit by removing oldest files if needed
+  Future<void> _enforceCacheSizeLimit() async {
+    if (_cacheSizeUnlimited || _currentCacheSize <= _maxCacheSize) return;
+
+    // Get list of files sorted by last modified time
+    final directory = Directory(await _localPath);
+    if (!await directory.exists()) return;
+
+    final files = await directory
+        .list(recursive: true)
+        .where((entity) => entity is File)
+        .cast<File>()
+        .toList();
+
+    // Get modification times for all files
+    final modTimes = <File, DateTime>{};
+    for (final file in files) {
+      final stats = await file.stat();
+      modTimes[file] = stats.modified;
+    }
+
+    // Sort files by last modified time (oldest first)
+    files.sort((a, b) => modTimes[a]!.compareTo(modTimes[b]!));
+
+    // Remove oldest files until under limit
+    for (final file in files) {
+      if (_currentCacheSize <= _maxCacheSize) break;
+
+      final size = _fileSizes[file.path] ?? 0;
+      await file.delete();
+      _currentCacheSize -= size;
+      _fileSizes.remove(file.path);
+
+      // Also remove from memory cache if it's a document
+      final key = file.path.split('/').last.replaceAll('.json', '');
+      _memoryCache.remove(key);
+      _collectionCache.remove(key);
+    }
+  }
+
   /// Saves document data to persistent storage.
   Future<void> _saveToFile(
       DocumentReference docRef, Map<String, dynamic> data) async {
-    final file = await _getLocalFile(docRef);
-    await file.parent.create(recursive: true);
-    final convertedData = _convertForStorage(data);
-    await file.writeAsString(jsonEncode(convertedData));
+    if (_cacheSizeUnlimited || _currentCacheSize < _maxCacheSize) {
+      final file = await _getLocalFile(docRef);
+      await file.parent.create(recursive: true);
+      final convertedData = _convertForStorage(data);
+      final jsonData = jsonEncode(convertedData);
+      await file.writeAsString(jsonData);
+      await _updateCacheSize(file.path, jsonData.length);
+    }
   }
 
   /// Saves collection data to persistent storage
   Future<void> _saveCollectionToFile(
       Query query, List<ColdStoreDocument> docs) async {
-    final file = await _getCollectionFile(query);
-    await file.parent.create(recursive: true);
+    if (_cacheSizeUnlimited || _currentCacheSize < _maxCacheSize) {
+      final file = await _getCollectionFile(query);
+      await file.parent.create(recursive: true);
 
-    final List<Map<String, dynamic>> serializedDocs = docs.map((doc) {
-      return {
-        'id': doc.id,
-        'path': doc.reference.path,
-        'data': _convertForStorage(doc.data()!),
-      };
-    }).toList();
+      final List<Map<String, dynamic>> serializedDocs = docs.map((doc) {
+        return {
+          'id': doc.id,
+          'path': doc.reference.path,
+          'data': _convertForStorage(doc.data()!),
+        };
+      }).toList();
 
-    await file.writeAsString(jsonEncode(serializedDocs));
+      final jsonData = jsonEncode(serializedDocs);
+      await file.writeAsString(jsonData);
+      await _updateCacheSize(file.path, jsonData.length);
+    }
   }
 
   /// Reads document data from persistent storage.
@@ -366,8 +479,8 @@ class ColdStore {
   Future<ColdStoreQuerySnapshot> getCollection(Query query) async {
     final key = _getCollectionKey(query);
 
-    // Start watching if auto-watch is enabled
-    if (autoWatch) {
+    // Start watching if auto-watch is enabled and not already watching
+    if (autoWatch && !_watchedCollections.contains(key)) {
       await watchCollection(query);
     }
 
@@ -381,6 +494,13 @@ class ColdStore {
     if (persistedData != null) {
       final snapshot = ColdStoreQuerySnapshot(docs: persistedData);
       _collectionCache[key] = snapshot;
+
+      // Start watching even if we got data from cache
+      if (autoWatch && !_watchedCollections.contains(key)) {
+        // Don't await here since we already have cached data
+        watchCollection(query);
+      }
+
       return snapshot;
     }
 
@@ -400,6 +520,13 @@ class ColdStore {
       final snapshot = ColdStoreQuerySnapshot(docs: docs);
       await _saveCollectionToFile(query, docs);
       _collectionCache[key] = snapshot;
+
+      // Start watching even after fresh Firestore fetch
+      if (autoWatch && !_watchedCollections.contains(key)) {
+        // Don't await here since we already have fresh data
+        watchCollection(query);
+      }
+
       return snapshot;
     } catch (e) {
       return ColdStoreQuerySnapshot(docs: []);
@@ -519,19 +646,21 @@ class ColdStore {
   /// ```
   Future<void> clear(DocumentReference? docRef) async {
     if (docRef != null) {
-      // Clear specific document (existing code)
       final key = _getDocumentKey(docRef);
       _memoryCache.remove(key);
       final file = await _getLocalFile(docRef);
       if (await file.exists()) {
+        await _updateCacheSize(file.path, null);
         await file.delete();
       }
     } else {
-      // Clear all cache including collections
       _memoryCache.clear();
       _collectionCache.clear();
       final directory = Directory(await _localPath);
       if (await directory.exists()) {
+        // Update cache size tracking
+        _currentCacheSize = 0;
+        _fileSizes.clear();
         await directory.delete(recursive: true);
       }
     }
@@ -558,7 +687,7 @@ class ColdStore {
     _watchedCollections.clear();
     _collectionCache.clear();
 
-    // Clean up document watchers (existing dispose code)
+    // Clean up document watchers
     for (final subscription in _listeners.values) {
       await subscription.cancel();
     }
@@ -566,4 +695,107 @@ class ColdStore {
     _watchedPaths.clear();
     _memoryCache.clear();
   }
+
+  /// Returns statistics about the current cache state.
+  ///
+  /// Returns a Map containing:
+  /// - currentSize: Current cache size in bytes
+  /// - maxSize: Maximum allowed cache size in bytes (null if unlimited)
+  /// - percentUsed: Percentage of cache used (null if unlimited)
+  /// - numDocuments: Number of cached documents
+  /// - numCollections: Number of cached collections
+  /// - numWatchers: Total number of active watchers
+  Map<String, dynamic> getCacheStats() {
+    return {
+      'currentSize': _currentCacheSize,
+      'maxSize': _cacheSizeUnlimited ? null : _maxCacheSize,
+      'percentUsed': _cacheSizeUnlimited
+          ? null
+          : (_currentCacheSize / _maxCacheSize * 100).round(),
+      'numDocuments': _memoryCache.length,
+      'numCollections': _collectionCache.length,
+      'numWatchers': _listeners.length + _collectionListeners.length,
+    };
+  }
+
+  /// Lists all cached documents.
+  ///
+  /// Returns a map where:
+  /// - key: document path
+  /// - value: document metadata including last modified time and size
+  Future<Map<String, Map<String, dynamic>>> listCachedDocuments() async {
+    final result = <String, Map<String, dynamic>>{};
+
+    for (final entry in _memoryCache.entries) {
+      final docRef = entry.value.reference;
+      final file = await _getLocalFile(docRef);
+      if (await file.exists()) {
+        final stat = await file.stat();
+        result[entry.key] = {
+          'id': entry.value.id,
+          'path': entry.value.reference.path,
+          'size': _fileSizes[file.path] ?? 0,
+          'lastModified': stat.modified,
+          'isWatched': _watchedPaths.contains(entry.key),
+        };
+      }
+    }
+
+    return result;
+  }
+
+  /// Lists all cached collections.
+  ///
+  /// Returns a map where:
+  /// - key: collection path/query string
+  /// - value: collection metadata including document count and size
+  Future<Map<String, Map<String, dynamic>>> listCachedCollections() async {
+    final result = <String, Map<String, dynamic>>{};
+
+    for (final entry in _collectionCache.entries) {
+      final file =
+          await _getCollectionFile(entry.value.docs.first.reference.parent);
+      if (await file.exists()) {
+        final stat = await file.stat();
+        result[entry.key] = {
+          'path': entry.key,
+          'documentCount': entry.value.size,
+          'size': _fileSizes[file.path] ?? 0,
+          'lastModified': stat.modified,
+          'isWatched': _watchedCollections.contains(entry.key),
+        };
+      }
+    }
+
+    return result;
+  }
+
+  /// Lists all active watchers (listeners).
+  ///
+  /// Returns a map containing:
+  /// - documents: List of watched document paths
+  /// - collections: List of watched collection paths/queries
+  Map<String, List<String>> listActiveWatchers() {
+    return {
+      'documents': _watchedPaths.toList(),
+      'collections': _watchedCollections.toList(),
+    };
+  }
+
+  /// Returns true if the cache is approaching its size limit.
+  ///
+  /// [threshold] - Percentage (0-100) at which to consider the cache nearly full.
+  /// Defaults to 90%.
+  ///
+  /// Always returns false if cache size is unlimited.
+  bool isCacheNearlyFull([int threshold = 90]) {
+    if (_cacheSizeUnlimited) return false;
+    return (_currentCacheSize / _maxCacheSize * 100) >= threshold;
+  }
+
+  /// Gets the current cache size in bytes.
+  int get currentCacheSize => _currentCacheSize;
+
+  /// Gets the maximum cache size in bytes, or null if unlimited.
+  int? get maxCacheSize => _cacheSizeUnlimited ? null : _maxCacheSize;
 }
