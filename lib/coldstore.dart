@@ -13,11 +13,14 @@
 /// // Start watching a document
 /// await coldStore.watch(docRef);
 ///
-/// // Get document data (checks cache layers automatically)
-/// final userData = await coldStore.get(docRef);
-///
-/// // Data is automatically kept in sync with Firestore
-/// // and stored in both memory and persistent storage
+/// // Get document with all metadata
+/// final doc = await coldStore.get(docRef);
+/// if (doc != null && doc.exists) {
+///   // Access document properties
+///   print('Document ID: ${doc.id}');
+///   print('Document data: ${doc.data()}');
+///   print('Document reference: ${doc.reference}');
+/// }
 ///
 /// // Clear cache for a specific document
 /// await coldStore.clear(docRef);
@@ -38,4 +41,4 @@
 /// No additional setup is required beyond Firebase initialization.
 library coldstore;
 
-export 'src/coldstore_base.dart' show ColdStore;
+export 'src/coldstore_base.dart' show ColdStore, ColdStoreDocument;

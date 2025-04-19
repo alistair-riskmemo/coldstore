@@ -5,6 +5,32 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 
+/// Represents a cached Firestore document, mirroring the DocumentSnapshot interface.
+class ColdStoreDocument {
+  /// The document's ID (the last component of the path).
+  final String id;
+
+  /// The document's data.
+  final Map<String, dynamic>? _data;
+
+  /// Whether the document exists in Firestore.
+  final bool exists;
+
+  /// A reference to the document's location in Firestore.
+  final DocumentReference reference;
+
+  ColdStoreDocument({
+    required this.id,
+    required Map<String, dynamic>? data,
+    required this.exists,
+    required this.reference,
+  }) : _data = data;
+
+  /// Gets the document's data, or null if the document doesn't exist.
+  Map<String, dynamic>? data() =>
+      _data != null ? Map<String, dynamic>.from(_data!) : null;
+}
+
 /// A caching layer for Firestore documents that implements a three-tier caching strategy.
 ///
 /// ColdStore provides three layers of data access:
@@ -20,8 +46,10 @@ import 'package:path/path.dart' as path;
 /// // Start watching for changes
 /// await coldStore.watch(docRef);
 ///
-/// // Get data (checks all cache layers)
-/// final data = await coldStore.get(docRef);
+/// // Get document (checks all cache layers)
+/// final doc = await coldStore.get(docRef);
+/// final data = doc?.data();  // Get the document data
+/// final userId = doc?.id;    // Get the document ID
 ///
 /// // Clear cache when needed
 /// await coldStore.clear(docRef);
@@ -30,8 +58,8 @@ import 'package:path/path.dart' as path;
 /// await coldStore.dispose();
 /// ```
 class ColdStore {
-  /// In-memory cache storing document data
-  final Map<String, dynamic> _memoryCache = {};
+  /// In-memory cache storing document data and metadata
+  final Map<String, ColdStoreDocument> _memoryCache = {};
 
   /// Active document watchers
   final Map<String, StreamSubscription<DocumentSnapshot>> _listeners = {};
@@ -188,7 +216,7 @@ class ColdStore {
   /// final data = await coldStore.get(docRef);
   /// // Document is now automatically watched if autoWatch is true
   /// ```
-  Future<Map<String, dynamic>?> get(DocumentReference docRef) async {
+  Future<ColdStoreDocument?> get(DocumentReference docRef) async {
     final key = _getDocumentKey(docRef);
 
     // Start watching if auto-watch is enabled and not already watching
@@ -198,30 +226,40 @@ class ColdStore {
 
     // 1. Check memory cache
     if (_memoryCache.containsKey(key)) {
-      return Map<String, dynamic>.from(_memoryCache[key]);
+      return _memoryCache[key];
     }
 
     // 2. Check persistent storage
     final persistedData = await _readFromFile(docRef);
     if (persistedData != null) {
-      _memoryCache[key] = persistedData;
-      return Map<String, dynamic>.from(persistedData);
+      final document = ColdStoreDocument(
+        id: docRef.id,
+        data: persistedData,
+        exists: true,
+        reference: docRef,
+      );
+      _memoryCache[key] = document;
+      return document;
     }
 
     // 3. Fetch from Firestore
     try {
       final doc = await docRef.get();
       final data = doc.data() as Map<String, dynamic>?;
+      final document = ColdStoreDocument(
+        id: docRef.id,
+        data: data,
+        exists: doc.exists,
+        reference: docRef,
+      );
       if (data != null) {
         await _saveToFile(docRef, data);
-        _memoryCache[key] = data;
-        return Map<String, dynamic>.from(data);
+        _memoryCache[key] = document;
       }
+      return document;
     } catch (e) {
       return null;
     }
-
-    return null;
   }
 
   /// Starts watching a document for changes.
@@ -243,8 +281,14 @@ class ColdStore {
 
     final subscription = docRef.snapshots().listen((doc) async {
       final data = doc.data() as Map<String, dynamic>?;
+      final document = ColdStoreDocument(
+        id: docRef.id,
+        data: data,
+        exists: doc.exists,
+        reference: docRef,
+      );
       if (data != null) {
-        _memoryCache[key] = data;
+        _memoryCache[key] = document;
         await _saveToFile(docRef, data);
       }
     });

@@ -35,14 +35,14 @@ class UserProfilePage extends StatefulWidget {
 class _UserProfilePageState extends State<UserProfilePage> {
   // Create ColdStore with auto-watching enabled (default)
   final ColdStore _coldStore = ColdStore();
-  Map<String, dynamic>? _userData;
+  ColdStoreDocument? _userDoc;
   bool _isLoading = true;
-  late final DocumentReference _userDoc;
+  late final DocumentReference _docRef;
 
   @override
   void initState() {
     super.initState();
-    _userDoc = FirebaseFirestore.instance.doc('users/example_user');
+    _docRef = FirebaseFirestore.instance.doc('users/example_user');
     _initializeData();
   }
 
@@ -56,9 +56,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
     try {
       // This will automatically start watching the document
-      final data = await _coldStore.get(_userDoc);
+      final doc = await _coldStore.get(_docRef);
       setState(() {
-        _userData = data;
+        _userDoc = doc;
         _isLoading = false;
       });
     } catch (e) {
@@ -75,7 +75,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     try {
       // Direct Firestore update - ColdStore will automatically sync
       // since the document is being watched
-      await _userDoc.set({
+      await _docRef.set({
         'name': 'John Doe',
         'email': 'john@example.com',
         'lastUpdated': Timestamp.now(),
@@ -102,6 +102,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    final userData = _userDoc?.data();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('User Profile'),
@@ -112,13 +114,13 @@ class _UserProfilePageState extends State<UserProfilePage> {
           ),
           IconButton(
             icon: const Icon(Icons.delete),
-            onPressed: () => _coldStore.clear(_userDoc),
+            onPressed: () => _coldStore.clear(_docRef),
           ),
         ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _userData == null
+          : _userDoc == null || !_userDoc!.exists
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -137,26 +139,30 @@ class _UserProfilePageState extends State<UserProfilePage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       UserDataTile(
+                        title: 'Document ID',
+                        value: _userDoc!.id,
+                      ),
+                      UserDataTile(
                         title: 'Name',
-                        value: _userData!['name']?.toString() ?? 'N/A',
+                        value: userData!['name']?.toString() ?? 'N/A',
                       ),
                       UserDataTile(
                         title: 'Email',
-                        value: _userData!['email']?.toString() ?? 'N/A',
+                        value: userData['email']?.toString() ?? 'N/A',
                       ),
                       UserDataTile(
                         title: 'Last Updated',
-                        value: _userData!['lastUpdated'] != null
-                            ? (_userData!['lastUpdated'] as Timestamp)
+                        value: userData['lastUpdated'] != null
+                            ? (userData['lastUpdated'] as Timestamp)
                                 .toDate()
                                 .toString()
                             : 'N/A',
                       ),
                       UserDataTile(
                         title: 'Location',
-                        value: _userData!['location'] != null
-                            ? '${(_userData!['location'] as GeoPoint).latitude}, '
-                                '${(_userData!['location'] as GeoPoint).longitude}'
+                        value: userData['location'] != null
+                            ? '${(userData['location'] as GeoPoint).latitude}, '
+                                '${(userData['location'] as GeoPoint).longitude}'
                             : 'N/A',
                       ),
                       const SizedBox(height: 16),

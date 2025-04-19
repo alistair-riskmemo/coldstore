@@ -9,7 +9,8 @@ A Flutter package that provides three-layer caching for Firestore documents, opt
 - [Quick Start](#quick-start)
 - [Detailed Usage](#detailed-usage)
   - [Initialization](#initialization)
-  - [Reading Data](#reading-data)
+  - [Reading Documents](#reading-documents)
+  - [Document Properties](#document-properties)
   - [Watching Documents](#watching-documents)
   - [Cache Management](#cache-management)
   - [Cleanup](#cleanup)
@@ -23,6 +24,7 @@ A Flutter package that provides three-layer caching for Firestore documents, opt
 ## Features
 
 - Three-layer caching strategy (Memory → Persistent Storage → Firestore)
+- Document interface matching Firestore's DocumentSnapshot
 - Automatic document syncing with Firestore
 - Automatic document watching for accessed documents
 - Efficient memory cache for fastest access
@@ -53,7 +55,11 @@ final coldStore = ColdStore();
 final docRef = FirebaseFirestore.instance.doc('users/123');
 
 // Get document data - automatically starts watching for changes
-final userData = await coldStore.get(docRef);
+final doc = await coldStore.get(docRef);
+if (doc != null && doc.exists) {
+  print('Document ID: ${doc.id}');
+  print('Document data: ${doc.data()}');
+}
 
 // Clean up when done
 await coldStore.dispose();
@@ -75,16 +81,31 @@ final customFirestore = FirebaseFirestore.instance;
 final coldStore = ColdStore(firestore: customFirestore);
 ```
 
-### Reading Data
+### Reading Documents
 
 ```dart
 final docRef = FirebaseFirestore.instance.doc('users/123');
 
-// Get data (automatically starts watching for changes)
-final data = await coldStore.get(docRef);
+// Get document (automatically starts watching for changes)
+final doc = await coldStore.get(docRef);
 
-// Document changes in Firestore will automatically update cache
+// Check if document exists
+if (doc != null && doc.exists) {
+  // Access document data and metadata
+  final data = doc.data();
+  final docId = doc.id;
+  final docRef = doc.reference;
+}
 ```
+
+### Document Properties
+
+ColdStoreDocument provides an interface similar to Firestore's DocumentSnapshot:
+
+- `id` - The document's ID (last component of the path)
+- `exists` - Whether the document exists in Firestore
+- `reference` - The DocumentReference pointing to this document
+- `data()` - Method to get the document's data
 
 ### Watching Documents
 
@@ -119,13 +140,13 @@ By default, ColdStore automatically starts watching any document that you access
 
 1. First call to `get()` for a document:
 
-   - Retrieves data from cache or Firestore
+   - Retrieves document from cache or Firestore
    - Sets up a real-time listener for changes
    - Future changes are automatically synced to cache
 
 2. Subsequent calls to `get()` for the same document:
 
-   - Return cached data immediately
+   - Return cached document immediately
    - Cache is always up-to-date due to background watching
 
 3. Benefits:
@@ -174,7 +195,7 @@ ColdStore implements a three-layer caching strategy:
 
 Data flow:
 
-1. When requesting data, checks memory cache first
+1. When requesting a document, checks memory cache first
 2. If not found, checks persistent storage
 3. If not found, fetches from Firestore
 4. When watching documents, updates flow from Firestore → Memory → Persistent Storage
@@ -186,18 +207,24 @@ Data flow:
    - Create a single ColdStore instance for your app
    - Initialize early in your app lifecycle
 
-2. **Document Watching**
+2. **Document Access**
+
+   - Use the document interface consistently
+   - Check document.exists before accessing data
+   - Keep document references if you need to update
+
+3. **Document Watching**
 
    - Watch documents you need to keep synchronized
    - Unwatch when the data is no longer needed
    - Consider using StatefulWidget's initState/dispose
 
-3. **Cache Management**
+4. **Cache Management**
 
    - Clear specific document caches when data becomes stale
    - Use full cache clear sparingly
 
-4. **Cleanup**
+5. **Cleanup**
    - Always call dispose() when done with ColdStore
    - Particularly important in temporary screens/widgets
 
@@ -206,6 +233,7 @@ Data flow:
 Check out the [example](example) directory for a complete sample application demonstrating:
 
 - User profile management
+- Document metadata access
 - Real-time updates
 - Cache management
 - Proper lifecycle handling
