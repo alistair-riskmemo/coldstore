@@ -1,6 +1,6 @@
 # ColdStore
 
-A Flutter package that provides three-layer caching for Firestore documents, optimizing data access and offline capabilities.
+A Flutter package that provides three-layer caching for Firestore documents and collections, optimizing data access and offline capabilities.
 
 ## Table of Contents
 
@@ -10,11 +10,14 @@ A Flutter package that provides three-layer caching for Firestore documents, opt
 - [Detailed Usage](#detailed-usage)
   - [Initialization](#initialization)
   - [Reading Documents](#reading-documents)
+  - [Reading Collections](#reading-collections)
   - [Document Properties](#document-properties)
+  - [Collection Properties](#collection-properties)
   - [Watching Documents](#watching-documents)
+  - [Watching Collections](#watching-collections)
   - [Cache Management](#cache-management)
   - [Cleanup](#cleanup)
-  - [Automatic Document Watching](#automatic-document-watching)
+  - [Automatic Watching](#automatic-watching)
 - [Supported Data Types](#supported-data-types)
 - [How it Works](#how-it-works)
 - [Best Practices](#best-practices)
@@ -24,14 +27,14 @@ A Flutter package that provides three-layer caching for Firestore documents, opt
 ## Features
 
 - Three-layer caching strategy (Memory → Persistent Storage → Firestore)
-- Document interface matching Firestore's DocumentSnapshot
-- Automatic document syncing with Firestore
-- Automatic document watching for accessed documents
+- Document and collection caching with query support
 - Efficient memory cache for fastest access
 - Persistent JSON storage as fallback
-- No external database dependencies
+- Real-time synchronization with Firestore
+- Automatic document/collection watching
 - Support for all Firestore data types
-- Simple API for document access
+- Query result caching
+- Simple API for data access
 
 ## Installation
 
@@ -51,15 +54,27 @@ await Firebase.initializeApp();
 // Create a ColdStore instance
 final coldStore = ColdStore();
 
-// Get a document reference
+// Working with documents
 final docRef = FirebaseFirestore.instance.doc('users/123');
-
-// Get document data - automatically starts watching for changes
 final doc = await coldStore.get(docRef);
 if (doc != null && doc.exists) {
-  print('Document ID: ${doc.id}');
   print('Document data: ${doc.data()}');
 }
+
+// Working with collections
+final usersRef = FirebaseFirestore.instance.collection('users');
+final snapshot = await coldStore.getCollection(usersRef);
+for (var doc in snapshot.docs) {
+  print('User ${doc.id}: ${doc.data()}');
+}
+
+// Using queries
+final activeUsers = await coldStore.getCollection(
+  usersRef.where('active', isEqualTo: true)
+);
+
+// Watch collections for changes
+await coldStore.watchCollection(usersRef);
 
 // Clean up when done
 await coldStore.dispose();
@@ -98,6 +113,33 @@ if (doc != null && doc.exists) {
 }
 ```
 
+### Reading Collections
+
+```dart
+final collectionRef = FirebaseFirestore.instance.collection('users');
+
+// Get all documents in a collection
+final snapshot = await coldStore.getCollection(collectionRef);
+print('Found ${snapshot.size} documents');
+
+// Access documents
+for (var doc in snapshot.docs) {
+  print('${doc.id}: ${doc.data()}');
+}
+
+// Using queries
+final activeUsers = await coldStore.getCollection(
+  collectionRef.where('active', isEqualTo: true)
+);
+
+final recentUsers = await coldStore.getCollection(
+  collectionRef
+    .where('lastActive', isGreaterThan: Timestamp.now())
+    .orderBy('lastActive', descending: true)
+    .limit(10)
+);
+```
+
 ### Document Properties
 
 ColdStoreDocument provides an interface similar to Firestore's DocumentSnapshot:
@@ -106,6 +148,14 @@ ColdStoreDocument provides an interface similar to Firestore's DocumentSnapshot:
 - `exists` - Whether the document exists in Firestore
 - `reference` - The DocumentReference pointing to this document
 - `data()` - Method to get the document's data
+
+### Collection Properties
+
+ColdStoreQuerySnapshot provides an interface similar to Firestore's QuerySnapshot:
+
+- `docs` - List of documents in the collection
+- `empty` - Whether the collection is empty
+- `size` - The number of documents in the collection
 
 ### Watching Documents
 
@@ -117,13 +167,27 @@ await coldStore.watch(docRef);
 await coldStore.unwatch(docRef);
 ```
 
+### Watching Collections
+
+```dart
+// Start watching a collection
+await coldStore.watchCollection(collectionRef);
+
+// With query
+final activeUsersQuery = collectionRef.where('active', isEqualTo: true);
+await coldStore.watchCollection(activeUsersQuery);
+
+// Stop watching when no longer needed
+await coldStore.unwatchCollection(collectionRef);
+```
+
 ### Cache Management
 
 ```dart
 // Clear cache for a specific document
 await coldStore.clear(docRef);
 
-// Clear all cached data
+// Clear all cached data (documents and collections)
 await coldStore.clear(null);
 ```
 
@@ -131,34 +195,35 @@ await coldStore.clear(null);
 
 ```dart
 // Always dispose when done to prevent memory leaks
+// This will clean up both document and collection watchers
 await coldStore.dispose();
 ```
 
-### Automatic Document Watching
+### Automatic Watching
 
-By default, ColdStore automatically starts watching any document that you access via the `get()` method. This means:
+By default, ColdStore automatically starts watching any document or collection that you access. This means:
 
-1. First call to `get()` for a document:
+1. First call to `get()` or `getCollection()`:
 
-   - Retrieves document from cache or Firestore
+   - Retrieves data from cache or Firestore
    - Sets up a real-time listener for changes
    - Future changes are automatically synced to cache
 
-2. Subsequent calls to `get()` for the same document:
+2. Subsequent calls:
 
-   - Return cached document immediately
+   - Return cached data immediately
    - Cache is always up-to-date due to background watching
 
 3. Benefits:
 
-   - Simpler API - no need to manually call `watch()`
+   - Simpler API - no need to manually call watch methods
    - Ensures data stays fresh
    - Prevents missed updates
    - Optimizes Firestore usage
 
 4. Control:
    - Disable with `ColdStore(autoWatch: false)`
-   - Manually control with `watch()` and `unwatch()`
+   - Manually control with watch/unwatch methods
    - All watchers cleaned up on `dispose()`
 
 ## Supported Data Types
@@ -174,12 +239,12 @@ ColdStore automatically handles all Firestore data types:
 
 ## How it Works
 
-ColdStore implements a three-layer caching strategy:
+ColdStore implements a three-layer caching strategy for both documents and collections:
 
 1. **Memory Cache (Layer 1)**
 
    - Fastest access
-   - Holds recently accessed documents
+   - Holds recently accessed documents and query results
    - Cleared when app is terminated
 
 2. **Persistent Storage (Layer 2)**
@@ -187,6 +252,7 @@ ColdStore implements a three-layer caching strategy:
    - JSON files stored on device
    - Survives app restarts
    - Provides offline access
+   - Separate storage for documents and collections
 
 3. **Firestore (Layer 3)**
    - Source of truth
@@ -195,10 +261,10 @@ ColdStore implements a three-layer caching strategy:
 
 Data flow:
 
-1. When requesting a document, checks memory cache first
+1. When requesting data, checks memory cache first
 2. If not found, checks persistent storage
 3. If not found, fetches from Firestore
-4. When watching documents, updates flow from Firestore → Memory → Persistent Storage
+4. When watching, updates flow from Firestore → Memory → Persistent Storage
 
 ## Best Practices
 
@@ -213,18 +279,42 @@ Data flow:
    - Check document.exists before accessing data
    - Keep document references if you need to update
 
-3. **Document Watching**
+3. **Collection Access**
+
+   - Use queries consistently to ensure proper cache hits
+   - Consider pagination for large collections
+   - Watch collections you need to keep synchronized
+
+4. **Query Caching**
+
+   - Each unique query combination is cached separately
+   - Reuse query references when possible
+   - Clear cache if query conditions change significantly
+
+5. **Document Watching**
 
    - Watch documents you need to keep synchronized
    - Unwatch when the data is no longer needed
    - Consider using StatefulWidget's initState/dispose
 
-4. **Cache Management**
+6. **Resource Management**
+
+   - Dispose of ColdStore instances when no longer needed
+   - Unwatch collections that are not currently visible
+   - Use clear() selectively to manage cache size
+
+7. **Cache Management**
 
    - Clear specific document caches when data becomes stale
    - Use full cache clear sparingly
 
-5. **Cleanup**
+8. **Offline Support**
+
+   - Test your app in airplane mode
+   - Handle both cached and fresh data gracefully
+   - Consider implementing retry logic for failed operations
+
+9. **Cleanup**
    - Always call dispose() when done with ColdStore
    - Particularly important in temporary screens/widgets
 

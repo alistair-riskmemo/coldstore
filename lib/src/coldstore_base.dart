@@ -31,6 +31,20 @@ class ColdStoreDocument {
       _data != null ? Map<String, dynamic>.from(_data!) : null;
 }
 
+/// Represents a cached collection query result, mirroring QuerySnapshot
+class ColdStoreQuerySnapshot {
+  /// The documents in the collection that matched the query
+  final List<ColdStoreDocument> docs;
+
+  /// Whether the collection is empty
+  bool get empty => docs.isEmpty;
+
+  /// The number of documents in the collection
+  int get size => docs.length;
+
+  ColdStoreQuerySnapshot({required this.docs});
+}
+
 /// A caching layer for Firestore documents that implements a three-tier caching strategy.
 ///
 /// ColdStore provides three layers of data access:
@@ -61,11 +75,21 @@ class ColdStore {
   /// In-memory cache storing document data and metadata
   final Map<String, ColdStoreDocument> _memoryCache = {};
 
+  /// Memory cache for collections
+  final Map<String, ColdStoreQuerySnapshot> _collectionCache = {};
+
   /// Active document watchers
   final Map<String, StreamSubscription<DocumentSnapshot>> _listeners = {};
 
+  /// Active collection watchers
+  final Map<String, StreamSubscription<QuerySnapshot>> _collectionListeners =
+      {};
+
   /// Set of document paths that are being watched
   final Set<String> _watchedPaths = {};
+
+  /// Set of collection paths that are being watched
+  final Set<String> _watchedCollections = {};
 
   /// The Firestore instance to use
   final FirebaseFirestore _firestore;
@@ -86,6 +110,15 @@ class ColdStore {
   /// Gets the storage key for a document reference.
   String _getDocumentKey(DocumentReference docRef) => docRef.path;
 
+  /// Gets the collection cache key
+  String _getCollectionKey(Query query) {
+    if (query is CollectionReference) {
+      return query.path;
+    }
+    // For queries, include the filters in the cache key
+    return '${(query as dynamic).path}_${query.parameters.hashCode}';
+  }
+
   /// Gets the base path for persistent storage.
   Future<String> get _localPath async {
     final directory = await getApplicationDocumentsDirectory();
@@ -97,6 +130,13 @@ class ColdStore {
     final basePath = await _localPath;
     final sanitizedPath = _getDocumentKey(docRef).replaceAll('/', '_');
     return File(path.join(basePath, '$sanitizedPath.json'));
+  }
+
+  /// Gets the file handle for a collection's persistent storage
+  Future<File> _getCollectionFile(Query query) async {
+    final basePath = await _localPath;
+    final sanitizedPath = _getCollectionKey(query).replaceAll('/', '_');
+    return File(path.join(basePath, 'collections', '$sanitizedPath.json'));
   }
 
   /// Converts Firestore data types to JSON-serializable format.
@@ -185,6 +225,23 @@ class ColdStore {
     await file.writeAsString(jsonEncode(convertedData));
   }
 
+  /// Saves collection data to persistent storage
+  Future<void> _saveCollectionToFile(
+      Query query, List<ColdStoreDocument> docs) async {
+    final file = await _getCollectionFile(query);
+    await file.parent.create(recursive: true);
+
+    final List<Map<String, dynamic>> serializedDocs = docs.map((doc) {
+      return {
+        'id': doc.id,
+        'path': doc.reference.path,
+        'data': _convertForStorage(doc.data()!),
+      };
+    }).toList();
+
+    await file.writeAsString(jsonEncode(serializedDocs));
+  }
+
   /// Reads document data from persistent storage.
   Future<Map<String, dynamic>?> _readFromFile(DocumentReference docRef) async {
     try {
@@ -193,6 +250,32 @@ class ColdStore {
       final contents = await file.readAsString();
       final data = jsonDecode(contents) as Map<String, dynamic>;
       return _convertFromStorage(data, _firestore);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Reads collection data from persistent storage
+  Future<List<ColdStoreDocument>?> _readCollectionFromFile(Query query) async {
+    try {
+      final file = await _getCollectionFile(query);
+      if (!await file.exists()) return null;
+      final contents = await file.readAsString();
+      final List<dynamic> data = jsonDecode(contents);
+
+      return data.map((docData) {
+        final id = docData['id'] as String;
+        final documentData = _convertFromStorage(
+          Map<String, dynamic>.from(docData['data']),
+          _firestore,
+        );
+        return ColdStoreDocument(
+          id: id,
+          data: documentData,
+          exists: true,
+          reference: _firestore.doc(docData['path']),
+        );
+      }).toList();
     } catch (e) {
       return null;
     }
@@ -262,6 +345,67 @@ class ColdStore {
     }
   }
 
+  /// Gets documents from a collection or query.
+  ///
+  /// Similar to document caching, collection results are cached in:
+  /// 1. Memory cache
+  /// 2. Persistent storage
+  /// 3. Firestore
+  ///
+  /// Example:
+  /// ```dart
+  /// final collectionRef = FirebaseFirestore.instance.collection('users');
+  /// // Get all documents
+  /// final snapshot = await coldStore.getCollection(collectionRef);
+  ///
+  /// // With query
+  /// final activeUsers = await coldStore.getCollection(
+  ///   collectionRef.where('active', isEqualTo: true)
+  /// );
+  /// ```
+  Future<ColdStoreQuerySnapshot> getCollection(Query query) async {
+    final key = _getCollectionKey(query);
+
+    // Start watching if auto-watch is enabled
+    if (autoWatch) {
+      await watchCollection(query);
+    }
+
+    // 1. Check memory cache
+    if (_collectionCache.containsKey(key)) {
+      return _collectionCache[key]!;
+    }
+
+    // 2. Check persistent storage
+    final persistedData = await _readCollectionFromFile(query);
+    if (persistedData != null) {
+      final snapshot = ColdStoreQuerySnapshot(docs: persistedData);
+      _collectionCache[key] = snapshot;
+      return snapshot;
+    }
+
+    // 3. Fetch from Firestore
+    try {
+      final querySnapshot = await query.get();
+      final docs = querySnapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        return ColdStoreDocument(
+          id: doc.id,
+          data: data,
+          exists: true,
+          reference: doc.reference,
+        );
+      }).toList();
+
+      final snapshot = ColdStoreQuerySnapshot(docs: docs);
+      await _saveCollectionToFile(query, docs);
+      _collectionCache[key] = snapshot;
+      return snapshot;
+    } catch (e) {
+      return ColdStoreQuerySnapshot(docs: []);
+    }
+  }
+
   /// Starts watching a document for changes.
   ///
   /// Changes are automatically synchronized to both memory cache and persistent storage.
@@ -297,6 +441,41 @@ class ColdStore {
     _watchedPaths.add(key);
   }
 
+  /// Watches a collection or query for changes.
+  ///
+  /// Changes are automatically synchronized to both memory cache and persistent storage.
+  /// If the collection is already being watched, this is a no-op.
+  ///
+  /// Example:
+  /// ```dart
+  /// final collectionRef = FirebaseFirestore.instance.collection('users');
+  /// await coldStore.watchCollection(collectionRef);
+  /// // Changes will now be automatically cached
+  /// ```
+  Future<void> watchCollection(Query query) async {
+    final key = _getCollectionKey(query);
+    if (_watchedCollections.contains(key)) return;
+
+    final subscription = query.snapshots().listen((snapshot) async {
+      final docs = snapshot.docs.map((doc) {
+        final data = doc.data() as Map<String, dynamic>;
+        return ColdStoreDocument(
+          id: doc.id,
+          data: data,
+          exists: true,
+          reference: doc.reference,
+        );
+      }).toList();
+
+      final querySnapshot = ColdStoreQuerySnapshot(docs: docs);
+      _collectionCache[key] = querySnapshot;
+      await _saveCollectionToFile(query, docs);
+    });
+
+    _collectionListeners[key] = subscription;
+    _watchedCollections.add(key);
+  }
+
   /// Stops watching a document for changes.
   ///
   /// The document data remains in cache but won't be automatically updated.
@@ -315,6 +494,16 @@ class ColdStore {
     }
   }
 
+  /// Stops watching a collection for changes.
+  Future<void> unwatchCollection(Query query) async {
+    final key = _getCollectionKey(query);
+    final subscription = _collectionListeners.remove(key);
+    if (subscription != null) {
+      await subscription.cancel();
+      _watchedCollections.remove(key);
+    }
+  }
+
   /// Clears cached data for a specific document or all documents.
   ///
   /// If [docRef] is provided, clears cache only for that document.
@@ -330,6 +519,7 @@ class ColdStore {
   /// ```
   Future<void> clear(DocumentReference? docRef) async {
     if (docRef != null) {
+      // Clear specific document (existing code)
       final key = _getDocumentKey(docRef);
       _memoryCache.remove(key);
       final file = await _getLocalFile(docRef);
@@ -337,7 +527,9 @@ class ColdStore {
         await file.delete();
       }
     } else {
+      // Clear all cache including collections
       _memoryCache.clear();
+      _collectionCache.clear();
       final directory = Directory(await _localPath);
       if (await directory.exists()) {
         await directory.delete(recursive: true);
@@ -358,6 +550,15 @@ class ColdStore {
   /// await coldStore.dispose();
   /// ```
   Future<void> dispose() async {
+    // Clean up collection watchers
+    for (final subscription in _collectionListeners.values) {
+      await subscription.cancel();
+    }
+    _collectionListeners.clear();
+    _watchedCollections.clear();
+    _collectionCache.clear();
+
+    // Clean up document watchers (existing dispose code)
     for (final subscription in _listeners.values) {
       await subscription.cancel();
     }
