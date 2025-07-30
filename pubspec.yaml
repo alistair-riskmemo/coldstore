@@ -1,6 +1,6 @@
 name: coldstore
 description: A three-layer caching system for Firestore documents and collections, providing efficient offline persistence and real-time sync
-version: 0.1.2
+version: 0.1.1
 repository: https://github.com/alistair-riskmemo/coldstore
 homepage: https://github.com/alistair-riskmemo/coldstore
 license: MIT

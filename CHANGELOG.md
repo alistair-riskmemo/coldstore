@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2 - 2025-07-30
+
+### Changed
+
+- Updated Firebase dependencies to latest versions
+  - Firebase Core ^4.0.0 (previously ^2.24.2)
+  - Cloud Firestore ^6.0.0 (previously ^4.14.0)
+  - Path Provider ^2.1.5 (previously ^2.1.2)
+
 ## 0.1.0 - 2025-04-18
 
 ### Added
